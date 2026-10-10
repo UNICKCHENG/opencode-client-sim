@@ -10,10 +10,10 @@
 //                 metadata.user_id and Claude Code's system prompt when the
 //                 request has none, against the relay's /v1/messages.
 //
-// Sign-in is a relay's base URL, an API key and a model list; they are kept
-// as one account per key (plugin-auth.json), so several relays, or several
-// keys of one relay, are several accounts magpie orders and falls back over
-// as it does a built-in's. What to impersonate is set in the plugin's
+// Sign-in is a relay's base URL and an API key; the models it serves are
+// read from the relay itself. Both are kept as one account per key
+// (plugin-auth.json), so several relays, or several keys of one relay, are
+// several accounts magpie orders and falls back over as it does a built-in's. What to impersonate is set in the plugin's
 // options (magpie plugin options client-sim '<json>'):
 //
 //   { "codex": { "clientVersion": "0.46.0", "instructions": "codex" },
@@ -136,9 +136,10 @@ const simulated = (sim, opts, auth) => {
 	}
 }
 
-// promptOf asks the two things sign-in needs that a key alone doesn't say:
-// where the relay is, and which models it serves. The key is asked after
-// these, as every api sign-in's is.
+// promptOf asks the one thing sign-in needs that a key alone doesn't
+// say: where the relay is. The key is asked after it, as every api
+// sign-in's is — the same two things a custom OpenAI provider takes. The
+// models aren't asked: they are read from the relay (discoverModels).
 const promptOf = (what) => [
 	{
 		type: "text",
@@ -153,12 +154,6 @@ const promptOf = (what) => [
 				return "an address like https://relay.example.com"
 			}
 		},
-	},
-	{
-		type: "text",
-		key: "models",
-		message: "Models the relay serves, comma-separated",
-		placeholder: "gpt-5.6,gpt-5.6-sol",
 	},
 ]
 
@@ -197,6 +192,35 @@ const modelList = (auth) =>
 		.split(",")
 		.map((m) => m.trim())
 		.filter(Boolean)
+
+// discoverModels asks the relay itself which models it serves, as a real
+// client's list comes to it: GET /v1/models under the client's own
+// identity, so a relay that checks the caller there too reads the client
+// it expects. A list once read is kept for a while; a relay that won't
+// say leaves the provider's defaults standing.
+const MODEL_TTL = 10 * 60 * 1000
+const modelCache = new Map() // key -> { list, at }
+const discoverModels = async (sim, opts, auth) => {
+	const key = auth?.key ?? ""
+	const was = modelCache.get(key)
+	if (was && Date.now() - was.at < MODEL_TTL) return was.list
+	const headers = new Headers()
+	headers.set("authorization", `Bearer ${key}`)
+	const version = String(opts.clientVersion ?? "").trim() || sim.defaultVersion
+	for (const [k, v] of Object.entries(sim.headers(version, opts))) {
+		if (v === "" || k.toLowerCase() === "accept") continue
+		headers.set(k, v)
+	}
+	headers.set("Accept", "application/json")
+	const r = await globalThis.fetch(`${baseOf(auth?.metadata?.baseURL)}/v1/models`, { headers })
+	if (!r.ok) throw new Error("relay answered " + r.status + " for /v1/models")
+	const j = await r.json()
+	const list = (j?.data ?? j?.models ?? [])
+		.map((m) => String(m?.id ?? "").trim())
+		.filter(Boolean)
+	modelCache.set(key, { list, at: Date.now() })
+	return list
+}
 
 const makePlugin = (sim) => async (_input, options = {}) => {
 	const opts = { ...sim.defaults, ...(options?.[sim.option] ?? {}) }
@@ -238,9 +262,14 @@ const makePlugin = (sim) => async (_input, options = {}) => {
 		provider: {
 			id: sim.id,
 			async models(provider, { auth } = {}) {
-				const list = modelList(auth)
-				if (!list.length) return provider?.models ?? {}
-				return Object.fromEntries(list.map((m) => [m, runtimeModel(m, sim.id, sim.npm)]))
+				const mine = modelList(auth)
+				if (!mine.length && auth?.key && String(auth.metadata?.baseURL ?? "").trim()) {
+					// what the relay says it serves, as a custom OpenAI provider's
+					// model list is; what it won't say, the defaults stand for
+					try { mine.push(...(await discoverModels(sim, opts, auth))) } catch {}
+				}
+				if (!mine.length) return provider?.models ?? {}
+				return Object.fromEntries(mine.map((m) => [m, runtimeModel(m, sim.id, sim.npm)]))
 			},
 		},
 		// chat.headers gives each magpie session its own stable client

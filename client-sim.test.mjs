@@ -43,15 +43,17 @@ test("stableUUID is a stable UUID-shaped identity of its seed", () => {
 	expect(stableUUID("other")).not.toBe(a)
 })
 
-test("sign-in asks the relay's address and models, and the address must be one", async () => {
+test("sign-in asks only the relay's address, and it must be one", async () => {
 	for (const plugin of [CodexSimPlugin, ClaudeCodeSimPlugin]) {
 		const [method] = (await hooksOf(plugin)).auth.methods
 		const m = method
 		expect(m.type).toBe("api")
-		const base = m.prompts.find((p) => p.key === "baseURL")
+		// the same two things a custom OpenAI provider takes: an address, then
+		// the key — models come from the relay, not a question
+		expect(m.prompts.map((p) => p.key)).toEqual(["baseURL"])
+		const base = m.prompts[0]
 		expect(base.validate("relay.example.com")).toBe(null)
 		expect(base.validate("nope")).toBeTruthy()
-		expect(m.prompts.find((p) => p.key === "models")).toBeTruthy()
 	}
 })
 
@@ -67,6 +69,33 @@ test("the models hook lists the account's models under its provider", async () =
 	expect(list["gpt-5.6"].providerID).toBe("codex-sim")
 	// no list signed in with: the provider keeps what it had
 	expect(await hooks.provider.models({ models: { kept: {} } }, { auth: account({ models: "" }) })).toEqual({ kept: {} })
+})
+
+test("with no list of its own, the models are read from the relay under the client's identity", async () => {
+	const asked = []
+	const was = globalThis.fetch
+	globalThis.fetch = async (url, init) => {
+		asked.push([String(url), init])
+		return new Response(JSON.stringify({ data: [{ id: "gpt-5.7" }, { id: "gpt-5.7-sol" }] }), { headers: { "content-type": "application/json" } })
+	}
+	try {
+		const hooks = await hooksOf(ClaudeCodeSimPlugin)
+		const auth = { ...account({ baseURL: "https://cc-relay.example.com", models: "" }), key: "sk-disc-1" }
+		const list = await hooks.provider.models({ models: { kept: {} } }, { auth })
+		expect(Object.keys(list)).toEqual(["gpt-5.7", "gpt-5.7-sol"])
+		expect(list["gpt-5.7"].providerID).toBe("claude-code-sim")
+		// the discovery asks the relay's /v1/models wearing the client's clothes
+		expect(asked[0][0]).toBe("https://cc-relay.example.com/v1/models")
+		const h = new Headers(asked[0][1].headers)
+		expect(h.get("user-agent")).toContain("claude-cli/")
+		expect(h.get("authorization")).toBe("Bearer sk-disc-1")
+		expect(h.get("accept")).toBe("application/json")
+		// a relay that won't say leaves the provider's defaults standing
+		globalThis.fetch = async () => new Response("nope", { status: 404 })
+		expect(await hooks.provider.models({ models: { kept: {} } }, { auth: account({ baseURL: "https://x.example.com", key: "k2", models: "" }) })).toEqual({ kept: {} })
+	} finally {
+		globalThis.fetch = was
+	}
 })
 
 test("the config hook declares the provider, its API family and a default model list", async () => {

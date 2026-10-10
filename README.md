@@ -14,9 +14,9 @@ Two providers, one package:
 | `codex-sim` | Codex CLI (`codex_cli_rs`) | Codex clients, OpenAI Responses `/responses` |
 | `claude-code-sim` | Claude Code CLI (`claude-cli`) | Claude Code clients, Anthropic `/v1/messages` |
 
-Sign-in keeps a relay's base URL, an API key and its model list, as one
-account per key (`plugin-auth.json`); several relays, or several keys of one
-relay, are several accounts magpie orders and falls back over as a built-in's.
+Sign-in keeps a relay's base URL and an API key, as one account per key
+(`plugin-auth.json`); several relays, or several keys of one relay, are
+several accounts magpie orders and falls back over as a built-in's.
 
 Impersonation is set in the plugin's options, with a default that answers
 most relays:
@@ -74,10 +74,13 @@ then sign in:
 magpie plugin login codex-sim   # or claude-code-sim
 ```
 
-Sign-in asks the relay's base URL, its model list, then the API key. In the
-app, the providers appear on the Providers page after the plugin is
-installed. Agents use the models as any provider's: `codex-sim/gpt-5.6`,
-`claude-code-sim/claude-sonnet-5.5`.
+Sign-in asks the relay's base URL, then the API key — the same two things a
+custom OpenAI provider takes. The models it serves are read from the relay
+itself (`GET /v1/models`, under the client's identity), as a custom
+provider's model list is; a relay that won't say leaves the defaults
+standing. In the app, the providers appear on the Providers page after the
+plugin is installed. Agents use the models as any provider's:
+`codex-sim/gpt-5.6`, `claude-code-sim/claude-sonnet-5.5`.
 
 OpenCode, in `opencode.json`:
 
