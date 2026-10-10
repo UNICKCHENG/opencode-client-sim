@@ -224,6 +224,10 @@ const discoverModels = async (sim, opts, auth) => {
 
 const makePlugin = (sim) => async (_input, options = {}) => {
 	const opts = { ...sim.defaults, ...(options?.[sim.option] ?? {}) }
+	// the switch: a sim set "enabled": false in the plugin's options is
+	// not declared at all, so it never shows among the providers; on
+	// again is one option away (magpie plugin options client-sim '…')
+	const on = opts.enabled !== false
 	return {
 		auth: {
 			provider: sim.id,
@@ -249,14 +253,20 @@ const makePlugin = (sim) => async (_input, options = {}) => {
 		async config(config) {
 			config.provider ??= {}
 			const was = config.provider[sim.id] ?? {}
+			if (!on) {
+				// switched off: what it may have declared before goes, or it
+				// would linger on as a provider nothing signs in to
+				delete config.provider[sim.id]
+				return
+			}
 			config.provider[sim.id] = {
 				name: sim.name,
 				npm: sim.npm,
 				api: "https://client-sim.invalid",
 				// a list to show before any account says its own; the account's
-				// models hook replaces it with what it signed in with
-				models: Object.fromEntries(sim.defaultModels.map((m) => [m, configModel(m)])),
-				...was,
+					// models hook replaces it with what it signed in with
+					models: Object.fromEntries(sim.defaultModels.map((m) => [m, configModel(m)])),
+					...was,
 			}
 		},
 		provider: {

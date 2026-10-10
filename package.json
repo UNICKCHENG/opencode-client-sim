@@ -5,15 +5,31 @@
   "type": "module",
   "main": "./index.mjs",
   "exports": "./index.mjs",
-  "files": ["index.mjs", "README.md"],
-  "scripts": { "test": "bun test" },
-  "keywords": ["magpie-plugin", "codex", "claude-code"],
+  "files": [
+    "index.mjs",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "bun test"
+  },
+  "keywords": [
+    "magpie-plugin",
+    "codex",
+    "claude-code"
+  ],
   "magpie": {
     "options": {
-      "codex": { "clientVersion": "0.162.1", "instructions": "codex" },
-      "claude-code": { "clientVersion": "2.1.296", "build": "406", "entrypoint": "cli", "sdkVersion": "0.128.0", "nodeVersion": "v26.3.0", "fakeUserId": "key", "systemPrompt": "claude-code", "betas": "auto" }
+      "codex": {
+        "enabled": true
+      },
+      "claude-code": {
+        "enabled": true
+      }
     }
   },
   "license": "MIT",
-  "repository": { "type": "git", "url": "git+https://github.com/UNICKCHENG/opencode-client-sim" }
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/UNICKCHENG/opencode-client-sim"
+  }
 }

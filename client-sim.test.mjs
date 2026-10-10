@@ -98,6 +98,16 @@ test("with no list of its own, the models are read from the relay under the clie
 	}
 })
 
+test("a sim switched off in the options is not declared at all", async () => {
+	for (const [plugin, option, id] of [[CodexSimPlugin, "codex", "codex-sim"], [ClaudeCodeSimPlugin, "claude-code", "claude-code-sim"]]) {
+		const hooks = await hooksOf(plugin, { [option]: { enabled: false } })
+		const config = { provider: { [id]: { name: "was here" }, other: {} } }
+		await hooks.config(config)
+		expect(config.provider[id]).toBeUndefined()
+		expect(config.provider.other).toEqual({}) // untouched
+	}
+})
+
 test("the config hook declares the provider, its API family and a default model list", async () => {
 	const config = { provider: {} }
 	;(await hooksOf(CodexSimPlugin)).config(config)

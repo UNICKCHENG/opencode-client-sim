@@ -28,6 +28,13 @@ most relays:
 }
 ```
 
+- `enabled`: the switch. `false` takes that sim off the providers page
+  entirely (its tiles, and what it had declared); `true`, the default,
+  has it back. A relay site you no longer use is one option away:
+
+  ```sh
+  magpie plugin options client-sim '{"claude-code": {"enabled": false}}'
+  ```
 - `clientVersion`: the client version in the User-Agent (and, for
   claude-code, in the billing marker). Bump it when a relay stops serving
   the default. Defaults follow live captures: codex-cli 0.162.1,
