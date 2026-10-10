@@ -1,7 +1,7 @@
 {
   "name": "@unickcheng/opencode-client-sim",
   "version": "0.1.0",
-  "description": "OpenCode provider plugins that wear a coding client's clothes for relay sites that only serve Codex CLI or Claude Code: codex-sim and claude-code-sim",
+  "description": "An OpenCode provider plugin that wears a coding client's clothes for relay sites that only serve Codex CLI or Claude Code requests",
   "type": "module",
   "main": "./index.mjs",
   "exports": "./index.mjs",
@@ -19,11 +19,12 @@
   ],
   "magpie": {
     "options": {
+      "enabled": true,
       "codex": {
-        "enabled": true
+        "clientVersion": "0.162.1"
       },
       "claude-code": {
-        "enabled": true
+        "clientVersion": "2.1.296"
       }
     }
   },

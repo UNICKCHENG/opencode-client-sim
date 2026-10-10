@@ -1,23 +1,28 @@
-// Client Sim: two providers that wear a coding client's clothes, for relay
-// sites that only serve Codex CLI or Claude Code requests.
+// Client Sim: one provider that wears a coding client's clothes, for relay
+// sites that only serve Codex CLI or Claude Code requests. Which client
+// is a sign-in question, not a provider of its own: pick Codex or Claude
+// Code, paste the relay's base URL and API key, and every request of that
+// account goes as the client you picked —
 //
-//   codex-sim  — the request a real Codex CLI (codex_cli_rs) sends: its
-//                 User-Agent and Originator, a stable per-session Session-Id,
-//                 OpenAI-Beta, store:false and the Codex base instructions,
-//                 against the relay's /responses.
-//   claude-code-sim     — the request a real Claude Code CLI sends: claude-cli
-//                 User-Agent, x-app, anthropic-beta, a stable per-key
-//                 metadata.user_id and Claude Code's system prompt when the
-//                 request has none, against the relay's /v1/messages.
+//   Codex  — the request a real Codex CLI (codex_cli_rs) sends: its
+//             User-Agent and Originator, a stable per-session Session-Id,
+//             store:false and the Codex base instructions, against the
+//             relay's /responses.
+//   Claude Code — the request a real Claude Code CLI sends: claude-cli
+//             User-Agent, x-app, anthropic-beta, a stable per-key
+//             metadata.user_id and Claude Code's system prompt when the
+//             request has none, against the relay's /v1/messages?beta=true.
 //
-// Sign-in is a relay's base URL and an API key; the models it serves are
-// read from the relay itself. Both are kept as one account per key
-// (plugin-auth.json), so several relays, or several keys of one relay, are
-// several accounts magpie orders and falls back over as it does a built-in's. What to impersonate is set in the plugin's
+// Sign-in asks which client, the relay's base URL and an API key; the
+// models it serves are read from the relay itself. Each is kept as one
+// account per key (plugin-auth.json), so several relays, or several keys
+// of one relay, are several accounts magpie orders and falls back over as
+// it does a built-in's. What to impersonate is set in the plugin's
 // options (magpie plugin options client-sim '<json>'):
 //
-//   { "codex": { "clientVersion": "0.46.0", "instructions": "codex" },
-//     "claude-code":    { "clientVersion": "2.1.35", "fakeUserId": "key",
+//   { "enabled": true,
+//     "codex": { "clientVersion": "0.162.1", "instructions": "codex" },
+//     "claude-code": { "clientVersion": "2.1.296", "fakeUserId": "key",
 //                "systemPrompt": "claude-code", "betas": "auto" } }
 import { createHash } from "node:crypto"
 import os from "node:os"
@@ -136,15 +141,25 @@ const simulated = (sim, opts, auth) => {
 	}
 }
 
-// promptOf asks the one thing sign-in needs that a key alone doesn't
-// say: where the relay is. The key is asked after it, as every api
-// sign-in's is — the same two things a custom OpenAI provider takes. The
-// models aren't asked: they are read from the relay (discoverModels).
-const promptOf = (what) => [
+// promptOf asks what a key alone doesn't say: which client to wear, and
+// where the relay is. The key is asked after them, as every api sign-in's
+// is. The models aren't asked: they are read from the relay
+// (discoverModels).
+const promptOf = () => [
+	{
+		type: "select",
+		key: "client",
+		message: "Which client should requests imitate?",
+		options: [
+			{ label: "Codex", value: "codex", hint: "codex_cli_rs, against /responses" },
+			{ label: "Claude Code", value: "claude-code", hint: "claude-cli, against /v1/messages" },
+		],
+		validate: (v) => (v === "codex" || v === "claude-code" ? null : "Codex or Claude Code"),
+	},
 	{
 		type: "text",
 		key: "baseURL",
-		message: `Relay base URL${what ? ` (${what})` : ""}, no path`,
+		message: "Relay base URL, no path",
 		placeholder: "https://relay.example.com",
 		validate: (v) => {
 			try {
@@ -222,87 +237,104 @@ const discoverModels = async (sim, opts, auth) => {
 	return list
 }
 
-const makePlugin = (sim) => async (_input, options = {}) => {
-	const opts = { ...sim.defaults, ...(options?.[sim.option] ?? {}) }
-	// the switch: a sim set "enabled": false in the plugin's options is
-	// not declared at all, so it never shows among the providers; on
-	// again is one option away (magpie plugin options client-sim '…')
-	const on = opts.enabled !== false
+// simOf is the client an account picked at sign-in; the account's
+// metadata names it, and every request of that account wears it.
+const simOf = (client, what = "account") => {
+	const sim = SIMS[client]
+	if (!sim) throw new Error(`unknown client ${JSON.stringify(client)} on ${what}; sign in again`)
+	return sim
+}
+
+// the plugin: one provider, client-sim. Which client to imitate is a
+// sign-in question answered per account, not a provider of its own.
+const makePlugin = async (_input, options = {}) => {
+	const optsOf = (client) => ({ ...SIMS[client].defaults, ...(options?.[client] ?? {}) })
+	const enabled = options?.enabled !== false
+	const providerID = "client-sim"
 	return {
 		auth: {
-			provider: sim.id,
+			provider: providerID,
 			loader: async (getAuth) => {
 				const auth = await getAuth()
-				if (!(auth?.type === "api" && auth.key)) throw new Error("sign in with a relay base URL and API key first")
+				if (!(auth?.type === "api" && auth.key)) throw new Error("sign in with the client to imitate, a relay base URL and API key first")
 				if (!String(auth.metadata?.baseURL ?? "").trim()) throw new Error("this account says no relay address; sign in again")
+				const sim = simOf(auth.metadata?.client)
+				const opts = optsOf(sim.key)
+				const version = String(opts.clientVersion ?? "").trim() || sim.defaultVersion
 				return {
 					baseURL: baseOf(auth.metadata?.baseURL),
 					apiKey: auth.key,
-					headers: sim.headers(String(opts.clientVersion ?? "").trim() || sim.defaultVersion, opts),
+					headers: sim.headers(version, opts),
 					fetch: simulated(sim, opts, auth),
+					// chat.headers reads this: the session identity headers of the
+					// client this account wears
+					sessionHeaders: sim.sessionHeaders ?? null,
 				}
 			},
 			methods: [
 				{
 					type: "api",
-					label: sim.signInLabel,
-					prompts: promptOf(sim.hint),
+					label: "API key",
+					placeholder: "sk-…",
+					prompts: promptOf(),
 				},
 			],
 		},
 		async config(config) {
 			config.provider ??= {}
-			const was = config.provider[sim.id] ?? {}
-			if (!on) {
+			const was = config.provider[providerID] ?? {}
+			if (!enabled) {
 				// switched off: what it may have declared before goes, or it
 				// would linger on as a provider nothing signs in to
-				delete config.provider[sim.id]
+				delete config.provider[providerID]
 				return
 			}
-			config.provider[sim.id] = {
-				name: sim.name,
-				npm: sim.npm,
+			config.provider[providerID] = {
+				name: "Client Sim",
+				npm: SIMS.codex.npm,
 				api: "https://client-sim.invalid",
 				// a list to show before any account says its own; the account's
-					// models hook replaces it with what it signed in with
-					models: Object.fromEntries(sim.defaultModels.map((m) => [m, configModel(m)])),
-					...was,
+				// models hook replaces it with what it signed in with, each
+				// model carrying the npm of the client that account wears
+				models: Object.fromEntries(SIMS.codex.defaultModels.map((m) => [m, configModel(m)])),
+				...was,
 			}
 		},
 		provider: {
-			id: sim.id,
+			id: providerID,
 			async models(provider, { auth } = {}) {
 				const mine = modelList(auth)
-				if (!mine.length && auth?.key && String(auth.metadata?.baseURL ?? "").trim()) {
+				const client = auth?.metadata?.client
+				if (client && !mine.length && auth?.key && String(auth.metadata?.baseURL ?? "").trim()) {
 					// what the relay says it serves, as a custom OpenAI provider's
 					// model list is; what it won't say, the defaults stand for
-					try { mine.push(...(await discoverModels(sim, opts, auth))) } catch {}
+					try { mine.push(...(await discoverModels(simOf(client), optsOf(client), auth))) } catch {}
 				}
 				if (!mine.length) return provider?.models ?? {}
-				return Object.fromEntries(mine.map((m) => [m, runtimeModel(m, sim.id, sim.npm)]))
+				const npm = client ? simOf(client).npm : SIMS.codex.npm
+				return Object.fromEntries(mine.map((m) => [m, runtimeModel(m, providerID, npm)]))
 			},
 		},
 		// chat.headers gives each magpie session its own stable client
 		// identity: the same conversation is the same id every request, a new
-		// one a new id, as a real client's is.
-		"chat.headers"({ model, sessionID }, out) {
-			if (model?.providerID !== sim.id || !sim.sessionHeaders || !sessionID) return
-			const u = stableUUID(`${sim.id} session ${sessionID}`)
-			Object.assign(out.headers, sim.sessionHeaders(u))
+		// one a new id, as a real client's is. Which identity headers belong
+		// on it comes from the account's own loader options, so an account
+		// wears its client's session marks, whichever it picked.
+		"chat.headers"({ model, sessionID, provider }, out) {
+			if (model?.providerID !== providerID || !sessionID) return
+			const sessionHeaders = provider?.options?.sessionHeaders
+			if (!sessionHeaders) return
+			Object.assign(out.headers, sessionHeaders(stableUUID(`${providerID} session ${sessionID}`)))
 		},
 	}
 }
 
-// The two sims. npm names the API the SDK speaks, which is also the shape
-// magpie's gateway builds: Responses for codex-sim, Anthropic Messages
-// for claude-code-sim — so the fetch rewrites identity, not protocol.
+// The two clients. npm names the API the SDK speaks, which is also the
+// shape magpie's gateway builds: Responses for Codex, Anthropic Messages
+// for Claude Code — so the fetch rewrites identity, not protocol.
 const SIMS = {
 	codex: {
-		id: "codex-sim",
-		option: "codex",
-		name: "Codex Client Sim",
-		hint: "Codex /responses relay",
-		signInLabel: "Codex-only relay: base URL and API key",
+		key: "codex",
 		npm: "@ai-sdk/openai",
 		path: "/responses",
 		defaultVersion: "0.162.1",
@@ -330,11 +362,7 @@ const SIMS = {
 		},
 	},
 	"claude-code": {
-		id: "claude-code-sim",
-		option: "claude-code",
-		name: "Claude Code Client Sim",
-		hint: "Claude Code /v1/messages relay",
-		signInLabel: "Claude-Code-only relay: base URL and API key",
+		key: "claude-code",
 		npm: "@ai-sdk/anthropic",
 		// a real Claude Code request goes to /v1/messages?beta=true (observed)
 		path: "/v1/messages?beta=true",
@@ -380,11 +408,10 @@ const SIMS = {
 	},
 }
 
-export const CodexSimPlugin = makePlugin(SIMS.codex)
-export const ClaudeCodeSimPlugin = makePlugin(SIMS["claude-code"])
+export const ClientSimPlugin = makePlugin
 
 // for tests
 export const _internal = {
-	SIMS, baseOf, stableUUID, codexUserAgent, ccUserAgent, simulated, modelList, promptOf, configModel, runtimeModel,
+	SIMS, baseOf, stableUUID, codexUserAgent, ccUserAgent, simulated, modelList, promptOf, configModel, runtimeModel, simOf,
 	constants: { CODEX_INSTRUCTIONS, CC_SYSTEM },
 }

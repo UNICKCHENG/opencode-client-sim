@@ -3,7 +3,7 @@
 // here reaches a network: the plugin's fetch calls globalThis.fetch, which
 // the test holds.
 import { afterEach, beforeEach, expect, test } from "bun:test"
-import { CodexSimPlugin, ClaudeCodeSimPlugin, _internal } from "./index.mjs"
+import { ClientSimPlugin, _internal } from "./index.mjs"
 
 const { baseOf, stableUUID, codexUserAgent, ccUserAgent, modelList } = _internal
 
@@ -21,13 +21,15 @@ afterEach(() => {
 	globalThis.fetch = realFetch
 })
 
+// an account of the client it names: codex unless said otherwise
 const account = (meta) => ({
 	type: "api",
 	key: "sk-relay-1",
-	metadata: { baseURL: "https://relay.example.com", models: "gpt-5.6, gpt-5.6-sol", ...meta },
+	metadata: { client: "codex", baseURL: "https://relay.example.com", models: "gpt-5.6, gpt-5.6-sol", ...meta },
 })
+const ccAccount = (meta) => account({ client: "claude-code", baseURL: "https://cc-relay.example.com", models: "claude-sonnet-5.5", ...meta })
 
-const hooksOf = async (plugin, options) => await plugin({ client: {} }, options)
+const hooksOf = async (options) => await ClientSimPlugin({ client: {} }, options)
 
 test("baseOf normalizes what the user pasted", () => {
 	expect(baseOf("https://relay.example.com/")).toBe("https://relay.example.com")
@@ -43,18 +45,17 @@ test("stableUUID is a stable UUID-shaped identity of its seed", () => {
 	expect(stableUUID("other")).not.toBe(a)
 })
 
-test("sign-in asks only the relay's address, and it must be one", async () => {
-	for (const plugin of [CodexSimPlugin, ClaudeCodeSimPlugin]) {
-		const [method] = (await hooksOf(plugin)).auth.methods
-		const m = method
-		expect(m.type).toBe("api")
-		// the same two things a custom OpenAI provider takes: an address, then
-		// the key — models come from the relay, not a question
-		expect(m.prompts.map((p) => p.key)).toEqual(["baseURL"])
-		const base = m.prompts[0]
-		expect(base.validate("relay.example.com")).toBe(null)
-		expect(base.validate("nope")).toBeTruthy()
-	}
+test("sign-in asks which client, the relay's address, then the key — models come from the relay", async () => {
+	const [method] = (await hooksOf()).auth.methods
+	expect(method.type).toBe("api")
+	expect(method.prompts.map((p) => p.key)).toEqual(["client", "baseURL"])
+	const [client, base] = method.prompts
+	expect(client.type).toBe("select")
+	expect(client.options.map((o) => o.value)).toEqual(["codex", "claude-code"])
+	expect(client.validate("codex")).toBe(null)
+	expect(client.validate("vscode")).toBeTruthy()
+	expect(base.validate("relay.example.com")).toBe(null)
+	expect(base.validate("nope")).toBeTruthy()
 })
 
 test("the model list of an account is the models it signed in with", () => {
@@ -62,11 +63,15 @@ test("the model list of an account is the models it signed in with", () => {
 	expect(modelList(account({ models: "" }))).toEqual([])
 })
 
-test("the models hook lists the account's models under its provider", async () => {
-	const hooks = await hooksOf(CodexSimPlugin)
+test("the models hook lists the account's models under its provider, in its client's API family", async () => {
+	const hooks = await hooksOf()
 	const list = await hooks.provider.models({ models: { kept: {} } }, { auth: account({}) })
 	expect(Object.keys(list)).toEqual(["gpt-5.6", "gpt-5.6-sol"])
-	expect(list["gpt-5.6"].providerID).toBe("codex-sim")
+	expect(list["gpt-5.6"].providerID).toBe("client-sim")
+	expect(list["gpt-5.6"].api.npm).toBe("@ai-sdk/openai")
+	// a claude-code account's models carry the Anthropic npm
+	const cc = await hooks.provider.models({ models: {} }, { auth: ccAccount({ models: "claude-sonnet-5.5" }) })
+	expect(cc["claude-sonnet-5.5"].api.npm).toBe("@ai-sdk/anthropic")
 	// no list signed in with: the provider keeps what it had
 	expect(await hooks.provider.models({ models: { kept: {} } }, { auth: account({ models: "" }) })).toEqual({ kept: {} })
 })
@@ -76,14 +81,14 @@ test("with no list of its own, the models are read from the relay under the clie
 	const was = globalThis.fetch
 	globalThis.fetch = async (url, init) => {
 		asked.push([String(url), init])
-		return new Response(JSON.stringify({ data: [{ id: "gpt-5.7" }, { id: "gpt-5.7-sol" }] }), { headers: { "content-type": "application/json" } })
+		return new Response(JSON.stringify({ data: [{ id: "claude-sonnet-5.5" }] }), { headers: { "content-type": "application/json" } })
 	}
 	try {
-		const hooks = await hooksOf(ClaudeCodeSimPlugin)
-		const auth = { ...account({ baseURL: "https://cc-relay.example.com", models: "" }), key: "sk-disc-1" }
+		const hooks = await hooksOf()
+		const auth = { ...ccAccount({ models: "" }), key: "sk-disc-1" }
 		const list = await hooks.provider.models({ models: { kept: {} } }, { auth })
-		expect(Object.keys(list)).toEqual(["gpt-5.7", "gpt-5.7-sol"])
-		expect(list["gpt-5.7"].providerID).toBe("claude-code-sim")
+		expect(Object.keys(list)).toEqual(["claude-sonnet-5.5"])
+		expect(list["claude-sonnet-5.5"].providerID).toBe("client-sim")
 		// the discovery asks the relay's /v1/models wearing the client's clothes
 		expect(asked[0][0]).toBe("https://cc-relay.example.com/v1/models")
 		const h = new Headers(asked[0][1].headers)
@@ -98,28 +103,24 @@ test("with no list of its own, the models are read from the relay under the clie
 	}
 })
 
-test("a sim switched off in the options is not declared at all", async () => {
-	for (const [plugin, option, id] of [[CodexSimPlugin, "codex", "codex-sim"], [ClaudeCodeSimPlugin, "claude-code", "claude-code-sim"]]) {
-		const hooks = await hooksOf(plugin, { [option]: { enabled: false } })
-		const config = { provider: { [id]: { name: "was here" }, other: {} } }
-		await hooks.config(config)
-		expect(config.provider[id]).toBeUndefined()
-		expect(config.provider.other).toEqual({}) // untouched
-	}
+test("the provider switched off in the options is not declared at all", async () => {
+	const hooks = await hooksOf({ enabled: false })
+	const config = { provider: { "client-sim": { name: "was here" }, other: {} } }
+	await hooks.config(config)
+	expect(config.provider["client-sim"]).toBeUndefined()
+	expect(config.provider.other).toEqual({}) // untouched
 })
 
-test("the config hook declares the provider, its API family and a default model list", async () => {
+test("the config hook declares one provider with a default model list", async () => {
 	const config = { provider: {} }
-	;(await hooksOf(CodexSimPlugin)).config(config)
-	;(await hooksOf(ClaudeCodeSimPlugin)).config(config)
-	expect(config.provider["codex-sim"].npm).toBe("@ai-sdk/openai")
-	expect(Object.keys(config.provider["codex-sim"].models).length).toBeGreaterThan(0)
-	expect(config.provider["claude-code-sim"].npm).toBe("@ai-sdk/anthropic")
-	expect(Object.keys(config.provider["claude-code-sim"].models).length).toBeGreaterThan(0)
+	await (await hooksOf()).config(config)
+	expect(config.provider["client-sim"].name).toBe("Client Sim")
+	expect(config.provider["client-sim"].npm).toBe("@ai-sdk/openai")
+	expect(Object.keys(config.provider["client-sim"].models).length).toBeGreaterThan(0)
 })
 
-test("codex-sim sends the request a Codex CLI would", async () => {
-	const hooks = await hooksOf(CodexSimPlugin, { codex: { clientVersion: "0.162.1" } })
+test("a codex account sends the request a Codex CLI would", async () => {
+	const hooks = await hooksOf({ codex: { clientVersion: "0.162.1" } })
 	const loader = await hooks.auth.loader(async () => account({}))
 	expect(loader.baseURL).toBe("https://relay.example.com")
 	expect(loader.apiKey).toBe("sk-relay-1")
@@ -147,12 +148,11 @@ test("codex-sim sends the request a Codex CLI would", async () => {
 	expect(body.include).toEqual(["reasoning.encrypted_content"])
 	expect(body.reasoning).toEqual({ summary: "auto" })
 	expect(body.instructions).toContain("You are a coding agent running in the Codex CLI")
-	expect(body.instructions).toContain("coding agent")
 	expect(body.model).toBe("gpt-5.6")
 })
 
 test("a codex request with its own instructions keeps them", async () => {
-	const hooks = await hooksOf(CodexSimPlugin)
+	const hooks = await hooksOf()
 	const loader = await hooks.auth.loader(async () => account({}))
 	await loader.fetch("https://client-sim.invalid/responses", {
 		headers: {},
@@ -162,33 +162,36 @@ test("a codex request with its own instructions keeps them", async () => {
 })
 
 test("chat.headers gives each session a stable conversation id of its own", async () => {
-	const hooks = await hooksOf(CodexSimPlugin)
+	const hooks = await hooksOf()
+	// the session marks come from the account's loader, as they do in the host
+	const codexLoader = await hooks.auth.loader(async () => account({}))
 	const out = { headers: {} }
-	hooks["chat.headers"]({ model: { providerID: "codex-sim" }, sessionID: "s-1" }, out)
+	hooks["chat.headers"]({ model: { providerID: "client-sim" }, sessionID: "s-1", provider: { options: codexLoader } }, out)
 	expect(out.headers["session-id"]).toMatch(/^[0-9a-f-]{36}$/)
 	expect(out.headers["thread-id"]).toBe(out.headers["session-id"])
 	expect(out.headers["x-client-request-id"]).toBe(out.headers["session-id"])
 	expect(out.headers["x-codex-window-id"]).toBe(out.headers["session-id"] + ":0")
 	const again = { headers: {} }
-	hooks["chat.headers"]({ model: { providerID: "codex-sim" }, sessionID: "s-1" }, again)
+	hooks["chat.headers"]({ model: { providerID: "client-sim" }, sessionID: "s-1", provider: { options: codexLoader } }, again)
 	expect(again.headers["session-id"]).toBe(out.headers["session-id"])
 	const other = { headers: {} }
-	hooks["chat.headers"]({ model: { providerID: "codex-sim" }, sessionID: "s-2" }, other)
+	hooks["chat.headers"]({ model: { providerID: "client-sim" }, sessionID: "s-2", provider: { options: codexLoader } }, other)
 	expect(other.headers["session-id"]).not.toBe(out.headers["session-id"])
-	// claude-code-sim names its session in its own header
+	// a claude-code account names its session in its own header
+	const ccLoader = await hooks.auth.loader(async () => ccAccount({}))
 	const cc = { headers: {} }
-	;(await hooksOf(ClaudeCodeSimPlugin))["chat.headers"]({ model: { providerID: "claude-code-sim" }, sessionID: "s-1" }, cc)
+	hooks["chat.headers"]({ model: { providerID: "client-sim" }, sessionID: "s-1", provider: { options: ccLoader } }, cc)
 	expect(cc.headers["x-claude-code-session-id"]).toMatch(/^[0-9a-f-]{36}$/)
 	// another provider's request, or none of a session: nothing added
 	const none = { headers: {} }
-	hooks["chat.headers"]({ model: { providerID: "zcode" }, sessionID: "s-1" }, none)
-	hooks["chat.headers"]({ model: { providerID: "codex-sim" }, sessionID: "" }, none)
+	hooks["chat.headers"]({ model: { providerID: "zcode" }, sessionID: "s-1", provider: { options: codexLoader } }, none)
+	hooks["chat.headers"]({ model: { providerID: "client-sim" }, sessionID: "" }, none)
 	expect(none.headers).toEqual({})
 })
 
-test("claude-code-sim sends the request a Claude Code CLI would", async () => {
-	const hooks = await hooksOf(ClaudeCodeSimPlugin, { "claude-code": { clientVersion: "2.1.296" } })
-	const loader = await hooks.auth.loader(async () => account({ baseURL: "https://cc-relay.example.com", models: "claude-sonnet-5.5" }))
+test("a claude-code account sends the request a Claude Code CLI would", async () => {
+	const hooks = await hooksOf({ "claude-code": { clientVersion: "2.1.296" } })
+	const loader = await hooks.auth.loader(async () => ccAccount({}))
 	await loader.fetch("https://client-sim.invalid/messages", {
 		method: "POST",
 		headers: { "x-stainless-package-version": "9.9.9", authorization: "Bearer sk-relay-1" },
@@ -218,24 +221,29 @@ test("claude-code-sim sends the request a Claude Code CLI would", async () => {
 })
 
 test("a cc request keeps its own system, and the user id is stable per key", async () => {
-		const hooks = await hooksOf(ClaudeCodeSimPlugin)
-		const load = async (key = "sk-relay-1") => await hooks.auth.loader(async () => ({ ...account({ baseURL: "https://cc-relay.example.com" }), key }))
-		await (await load()).fetch("https://client-sim.invalid/messages", {
-				headers: {},
-				body: JSON.stringify({ system: [{ type: "text", text: "mine" }], messages: [] }),
-		})
-		const first = JSON.parse(asked.init.body)
-		expect(first.system).toEqual([{ type: "text", text: "mine" }])
-		await (await load()).fetch("https://client-sim.invalid/messages", { headers: {}, body: JSON.stringify({ messages: [] }) })
-		expect(JSON.parse(asked.init.body).metadata.user_id).toBe(first.metadata.user_id)
-		// a different key is a different user
-		await (await load("sk-relay-2")).fetch("https://client-sim.invalid/messages", { headers: {}, body: JSON.stringify({ messages: [] }) })
-		expect(JSON.parse(asked.init.body).metadata.user_id).not.toBe(first.metadata.user_id)
+	const hooks = await hooksOf()
+	const load = async (key = "sk-relay-1") => await hooks.auth.loader(async () => ({ ...ccAccount({}), key }))
+	await (await load()).fetch("https://client-sim.invalid/messages", {
+		headers: {},
+		body: JSON.stringify({ system: [{ type: "text", text: "mine" }], messages: [] }),
+	})
+	const first = JSON.parse(asked.init.body)
+	expect(first.system).toEqual([{ type: "text", text: "mine" }])
+	await (await load()).fetch("https://client-sim.invalid/messages", { headers: {}, body: JSON.stringify({ messages: [] }) })
+	expect(JSON.parse(asked.init.body).metadata.user_id).toBe(first.metadata.user_id)
+	// a different key is a different user
+	await (await load("sk-relay-2")).fetch("https://client-sim.invalid/messages", { headers: {}, body: JSON.stringify({ messages: [] }) })
+	expect(JSON.parse(asked.init.body).metadata.user_id).not.toBe(first.metadata.user_id)
+})
+
+test("an account of a client that isn't one says so at load", async () => {
+	const hooks = await hooksOf()
+	await expect(hooks.auth.loader(async () => account({ client: "vscode" }))).rejects.toThrow("unknown client")
 })
 
 test("options can turn the impersonation's marks off", async () => {
-	const hooks = await hooksOf(ClaudeCodeSimPlugin, { "claude-code": { systemPrompt: "off", fakeUserId: "off", betas: "" } })
-	const loader = await hooks.auth.loader(async () => account({}))
+	const hooks = await hooksOf({ "claude-code": { systemPrompt: "off", fakeUserId: "off", betas: "" } })
+	const loader = await hooks.auth.loader(async () => ccAccount({}))
 	await loader.fetch("https://client-sim.invalid/messages", { headers: {}, body: JSON.stringify({ messages: [] }) })
 	const body = JSON.parse(asked.init.body)
 	expect(body.system).toBeUndefined()
@@ -245,7 +253,7 @@ test("options can turn the impersonation's marks off", async () => {
 })
 
 test("a non-streaming request asks for JSON, a streaming one for events", async () => {
-	const hooks = await hooksOf(CodexSimPlugin)
+	const hooks = await hooksOf()
 	const loader = await hooks.auth.loader(async () => account({}))
 	await loader.fetch("https://client-sim.invalid/responses", { headers: {}, body: JSON.stringify({ stream: false, input: [] }) })
 	expect(asked.init.headers.get("accept")).toBe("application/json")
@@ -254,12 +262,12 @@ test("a non-streaming request asks for JSON, a streaming one for events", async 
 })
 
 test("an account without a relay address says so, not a cryptic address error", async () => {
-	const hooks = await hooksOf(CodexSimPlugin)
-	await expect(hooks.auth.loader(async () => ({ type: "api", key: "k", metadata: {} }))).rejects.toThrow("sign in again")
+	const hooks = await hooksOf()
+	await expect(hooks.auth.loader(async () => account({ baseURL: "" }))).rejects.toThrow("sign in again")
 })
 
 test("a request that isn't JSON passes through as it was", async () => {
-	const hooks = await hooksOf(CodexSimPlugin)
+	const hooks = await hooksOf()
 	const loader = await hooks.auth.loader(async () => account({}))
 	await loader.fetch("https://client-sim.invalid/responses", { headers: {}, body: "not json" })
 	expect(asked.init.body).toBe("not json")
