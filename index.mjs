@@ -13,7 +13,8 @@
 //             metadata.user_id and Claude Code's system prompt when the
 //             request has none, against the relay's /v1/messages?beta=true.
 //
-// Sign-in asks which client, the relay's base URL and an API key; the
+// Sign-in's ways are the clients — Codex or Claude Code — then it asks the
+// relay's base URL and an API key; the
 // models it serves are read from the relay itself. Each is kept as one
 // account per key (plugin-auth.json), so several relays, or several keys
 // of one relay, are several accounts magpie orders and falls back over as
@@ -141,21 +142,12 @@ const simulated = (sim, opts, auth) => {
 	}
 }
 
-// promptOf asks what a key alone doesn't say: which client to wear, and
-// where the relay is. The key is asked after them, as every api sign-in's
-// is. The models aren't asked: they are read from the relay
+// promptOf asks the one thing sign-in needs that a key alone doesn't
+// say: where the relay is. Which client to wear is the way you sign in
+// (the method buttons, one screen), and the key is asked after, as every
+// api sign-in's is. The models aren't asked: they are read from the relay
 // (discoverModels).
 const promptOf = () => [
-	{
-		type: "select",
-		key: "client",
-		message: "Which client should requests imitate?",
-		options: [
-			{ label: "Codex", value: "codex", hint: "codex_cli_rs, against /responses" },
-			{ label: "Claude Code", value: "claude-code", hint: "claude-cli, against /v1/messages" },
-		],
-		validate: (v) => (v === "codex" || v === "claude-code" ? null : "Codex or Claude Code"),
-	},
 	{
 		type: "text",
 		key: "baseURL",
@@ -171,6 +163,19 @@ const promptOf = () => [
 		},
 	},
 ]
+
+// the ways to sign in are the clients: picking Codex or Claude Code is
+// picking what to wear, on the screen where a sign-in's way is picked —
+// one button a client, not a question more. authorize stamps the account
+// with the choice; the key still comes after, as every api sign-in's does.
+const methodsOf = () =>
+	["codex", "claude-code"].map((client) => ({
+		type: "api",
+		label: client === "codex" ? "Codex" : "Claude Code",
+		placeholder: "sk-…",
+		prompts: promptOf(),
+		authorize: async () => ({ type: "success", metadata: { client } }),
+	}))
 
 // configModel/runtimeModel are the two shapes a model is listed in: what
 // the config hook declares and what a models hook returns.
@@ -271,14 +276,7 @@ const makePlugin = async (_input, options = {}) => {
 					sessionHeaders: sim.sessionHeaders ?? null,
 				}
 			},
-			methods: [
-				{
-					type: "api",
-					label: "API key",
-					placeholder: "sk-…",
-					prompts: promptOf(),
-				},
-			],
+			methods: methodsOf(),
 		},
 		async config(config) {
 			config.provider ??= {}

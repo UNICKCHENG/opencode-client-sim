@@ -45,17 +45,22 @@ test("stableUUID is a stable UUID-shaped identity of its seed", () => {
 	expect(stableUUID("other")).not.toBe(a)
 })
 
-test("sign-in asks which client, the relay's address, then the key — models come from the relay", async () => {
-	const [method] = (await hooksOf()).auth.methods
-	expect(method.type).toBe("api")
-	expect(method.prompts.map((p) => p.key)).toEqual(["client", "baseURL"])
-	const [client, base] = method.prompts
-	expect(client.type).toBe("select")
-	expect(client.options.map((o) => o.value)).toEqual(["codex", "claude-code"])
-	expect(client.validate("codex")).toBe(null)
-	expect(client.validate("vscode")).toBeTruthy()
-	expect(base.validate("relay.example.com")).toBe(null)
-	expect(base.validate("nope")).toBeTruthy()
+test("the ways to sign in are the clients; then the relay's address, then the key", async () => {
+	const methods = (await hooksOf()).auth.methods
+	// one way a client, on the screen a sign-in's way is picked — not a
+	// question more
+	expect(methods.map((m) => m.label)).toEqual(["Codex", "Claude Code"])
+	for (const [i, client] of ["codex", "claude-code"].entries()) {
+		const m = methods[i]
+		expect(m.type).toBe("api")
+		expect(m.prompts.map((p) => p.key)).toEqual(["baseURL"])
+		expect(m.prompts[0].validate("relay.example.com")).toBe(null)
+		expect(m.prompts[0].validate("nope")).toBeTruthy()
+		// authorize stamps the account with the client the way names
+		const r = await m.authorize({})
+		expect(r.type).toBe("success")
+		expect(r.metadata).toEqual({ client })
+	}
 })
 
 test("the model list of an account is the models it signed in with", () => {
