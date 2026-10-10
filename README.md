@@ -7,17 +7,17 @@ a stable session or user identity, Codex's `instructions` and Claude Code's
 system prompt — to a relay's `/responses` or `/v1/messages`, so a provider
 that turns other clients away serves magpie's (or OpenCode's).
 
-One provider, `client-sim`. Which client to impersonate is the way you
-sign in — the Codex / Claude Code buttons on the sign-in screen — answered
-per account, not a provider of its own:
+One provider, `client-sim`. Sign-in is one form: which client to
+impersonate (「使用哪种方式模拟」: Codex or Claude Code), the relay's base
+URL, and the API key — answered per account, not a provider of its own:
 
 | Sign-in picks | Impersonates | Requests go as | For relays that serve |
 |---|---|---|---|
 | `Codex` | Codex CLI (`codex_cli_rs`) | OpenAI Responses `/responses` | Codex clients |
 | `Claude Code` | Claude Code CLI (`claude-cli`) | Anthropic `/v1/messages?beta=true` | Claude Code clients |
 
-Sign-in picks a client (Codex or Claude Code), then asks the relay's base
-URL and the API key, and keeps one account per key (`plugin-auth.json`); several relays,
+Sign-in asks which client to impersonate and the relay's base
+URL in one form, then the API key, and keeps one account per key (`plugin-auth.json`); several relays,
 or several keys of one relay, are several accounts magpie orders and
 falls back over as a built-in's. The models are read from the relay
 itself (`GET /v1/models`, under the client's identity).
@@ -86,8 +86,8 @@ then sign in:
 magpie plugin login client-sim
 ```
 
-Sign-in's ways are the clients — Codex or Claude Code — then it asks the
-relay's base URL and the API key. The models it serves are
+Sign-in is one form: which client to impersonate (「使用哪种方式模拟」:
+Codex or Claude Code) and the relay's base URL, then the API key. The models it serves are
 read from the relay itself (`GET /v1/models`, under the client's identity),
 as a custom provider's model list is; a relay that won't say leaves the
 defaults standing. In the app, the provider appears on the Providers page

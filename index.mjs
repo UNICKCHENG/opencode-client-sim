@@ -13,8 +13,8 @@
 //             metadata.user_id and Claude Code's system prompt when the
 //             request has none, against the relay's /v1/messages?beta=true.
 //
-// Sign-in's ways are the clients — Codex or Claude Code — then it asks the
-// relay's base URL and an API key; the
+// Sign-in is one form — which client to impersonate (「使用哪种方式模拟」:
+// Codex or Claude Code), the relay's base URL, and the API key — then
 // models it serves are read from the relay itself. Each is kept as one
 // account per key (plugin-auth.json), so several relays, or several keys
 // of one relay, are several accounts magpie orders and falls back over as
@@ -142,12 +142,19 @@ const simulated = (sim, opts, auth) => {
 	}
 }
 
-// promptOf asks the one thing sign-in needs that a key alone doesn't
-// say: where the relay is. Which client to wear is the way you sign in
-// (the method buttons, one screen), and the key is asked after, as every
-// api sign-in's is. The models aren't asked: they are read from the relay
-// (discoverModels).
-const promptOf = () => [
+// promptsOf is the one form sign-in shows, everything but the key: which
+// client to wear (the select, first) and where the relay is. The models
+// aren't asked: they are read from the relay (discoverModels).
+const promptsOf = () => [
+	{
+		type: "select",
+		key: "client",
+		message: "使用哪种方式模拟",
+		options: [
+			{ label: "Codex", value: "codex" },
+			{ label: "Claude Code", value: "claude-code" },
+		],
+	},
 	{
 		type: "text",
 		key: "baseURL",
@@ -164,18 +171,22 @@ const promptOf = () => [
 	},
 ]
 
-// the ways to sign in are the clients: picking Codex or Claude Code is
-// picking what to wear, on the screen where a sign-in's way is picked —
-// one button a client, not a question more. authorize stamps the account
-// with the choice; the key still comes after, as every api sign-in's does.
-const methodsOf = () =>
-	["codex", "claude-code"].map((client) => ({
+// the way to sign in is one: the form above asks which client to
+// impersonate and the relay's address, and the key field follows in the
+// same sign-in. authorize stamps the account with the choice.
+const methodsOf = () => [
+	{
 		type: "api",
-		label: client === "codex" ? "Codex" : "Claude Code",
+		label: "Client Sim",
 		placeholder: "sk-…",
-		prompts: promptOf(),
-		authorize: async () => ({ type: "success", metadata: { client } }),
-	}))
+		prompts: promptsOf(),
+		authorize: async (inputs) => {
+			const client = String(inputs?.client ?? "")
+			if (!SIMS[client]) return { type: "failed", error: "pick which client to impersonate: Codex or Claude Code" }
+			return { type: "success", metadata: { client } }
+		},
+	},
+]
 
 // configModel/runtimeModel are the two shapes a model is listed in: what
 // the config hook declares and what a models hook returns.
@@ -410,6 +421,6 @@ export const ClientSimPlugin = makePlugin
 
 // for tests
 export const _internal = {
-	SIMS, baseOf, stableUUID, codexUserAgent, ccUserAgent, simulated, modelList, promptOf, configModel, runtimeModel, simOf,
+	SIMS, baseOf, stableUUID, codexUserAgent, ccUserAgent, simulated, modelList, promptsOf, configModel, runtimeModel, simOf,
 	constants: { CODEX_INSTRUCTIONS, CC_SYSTEM },
 }
