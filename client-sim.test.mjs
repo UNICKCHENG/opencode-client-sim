@@ -5,7 +5,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test"
 import { ClientSimPlugin, _internal } from "./index.mjs"
 
-const { baseOf, stableUUID, codexUserAgent, ccUserAgent, modelList, parseLine } = _internal
+const { baseOf, stableUUID, codexUserAgent, ccUserAgent, modelList } = _internal
 
 const realFetch = globalThis.fetch
 let asked
@@ -45,35 +45,26 @@ test("stableUUID is a stable UUID-shaped identity of its seed", () => {
 	expect(stableUUID("other")).not.toBe(a)
 })
 
-test("sign-in is one line in one dialog: client, relay address, key — space-separated", async () => {
+test("sign-in asks which client to impersonate, then the relay's address; one method, no method screen", async () => {
 	const methods = (await hooksOf()).auth.methods
 	// one way only: no method-picking screen before the form
 	expect(methods).toHaveLength(1)
 	const m = methods[0]
 	expect(m.type).toBe("api")
-	// one prompt, one fill: the host asks each prompt its own screen, so
-	// the whole sign-in is the single line
-	expect(m.prompts).toHaveLength(1)
-	expect(m.prompts[0].key).toBe("line")
-	expect(m.prompts[0].validate("codex https://relay.example.com sk-relay-1")).toBe(null)
-	expect(m.prompts[0].validate("nope")).toBeTruthy()
-	// parseLine reads the three things in any order
-	expect(parseLine("codex https://relay.example.com sk-relay-1")).toEqual({ client: "codex", baseURL: "https://relay.example.com", key: "sk-relay-1" })
-	expect(parseLine("sk-relay-1 claude-code relay.example.com")).toEqual({ client: "claude-code", baseURL: "https://relay.example.com", key: "sk-relay-1" })
-	expect(parseLine("cc https://relay.example.com/ sk-1").baseURL).toBe("https://relay.example.com")
-	expect(parseLine("codex https://relay.example.com").error).toBeTruthy()
-	expect(parseLine("codex relay.example.com").error).toBeTruthy()
-	expect(parseLine("other https://relay.example.com sk-1").error).toBeTruthy()
-	// authorize parses the line into the account: the key it returns is the
-	// key the host saves — it asks no key field of its own
-	const r = await m.authorize({ line: "claude-code https://cc-relay.example.com sk-relay-1" })
-	expect(r.type).toBe("success")
-	expect(r.key).toBe("sk-relay-1")
-	expect(r.metadata).toEqual({ client: "claude-code", baseURL: "https://cc-relay.example.com" })
-	// a line that doesn't read is refused, with the reason
-	const bad = await m.authorize({ line: "codex" })
-	expect(bad.type).toBe("failed")
-	expect(bad.error).toBeTruthy()
+	expect(m.prompts.map((p) => p.key)).toEqual(["client", "baseURL"])
+	expect(m.prompts[0].type).toBe("select")
+	expect(m.prompts[0].message).toBe("使用哪种方式模拟")
+	expect(m.prompts[0].options.map((o) => o.value)).toEqual(["codex", "claude-code"])
+	expect(m.prompts[1].validate("relay.example.com")).toBe(null)
+	expect(m.prompts[1].validate("nope")).toBeTruthy()
+	// authorize stamps the account with the client the prompts picked
+	for (const client of ["codex", "claude-code"]) {
+		const r = await m.authorize({ client })
+		expect(r.type).toBe("success")
+		expect(r.metadata).toEqual({ client })
+	}
+	// a client the prompts never offered is refused, not guessed
+	expect((await m.authorize({ client: "other" })).type).toBe("failed")
 })
 
 test("the model list of an account is the models it signed in with", () => {

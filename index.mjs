@@ -13,9 +13,8 @@
 //             metadata.user_id and Claude Code's system prompt when the
 //             request has none, against the relay's /v1/messages?beta=true.
 //
-// Sign-in is one line in one dialog — which client to impersonate (codex
-// or claude-code), the relay's base URL and the API key, space-separated —
-// then
+// Sign-in asks which client to impersonate (「使用哪种方式模拟」: codex
+// or claude-code), the relay's base URL, and the API key —
 // models it serves are read from the relay itself. Each is kept as one
 // account per key (plugin-auth.json), so several relays, or several keys
 // of one relay, are several accounts magpie orders and falls back over as
@@ -143,62 +142,49 @@ const simulated = (sim, opts, auth) => {
 	}
 }
 
-// parseLine reads the one line sign-in asks for: which client to
-// impersonate, the relay's address, and the key — space-separated, in any
-// order. The client is told by name (codex, claude-code; cc and claude as
-// shorthands), the address is the token with a dot or a scheme, the key is
-// the rest. One prompt, one dialog: the host asks each prompt its own
-// screen, so the fewer the prompts the fewer the screens.
-const CLIENT_ALIASES = { codex: "codex", "claude-code": "claude-code", claude: "claude-code", cc: "claude-code" }
-const parseLine = (line) => {
-	const tokens = String(line ?? "").trim().split(/\s+/).filter(Boolean)
-	if (tokens.length !== 3) return { error: "three things, space-separated: which client to impersonate (codex / claude-code), the relay's base URL, and the API key" }
-	let client = ""
-	let baseURL = ""
-	let key = ""
-	for (const t of tokens) {
-		const alias = CLIENT_ALIASES[t.toLowerCase()]
-		if (alias && !client) client = alias
-		else if (!baseURL && (t.includes("://") || t.includes("."))) baseURL = t
-		else if (!key) key = t
-		else return { error: "couldn't read the line: use `codex https://relay.example.com sk-…`" }
-	}
-	if (!client) return { error: "name the client to impersonate: codex or claude-code" }
-	try {
-		baseURL = baseOf(baseURL)
-	} catch {
-		return { error: "the relay's base URL, like https://relay.example.com" }
-	}
-	if (!key) return { error: "the relay's API key is missing" }
-	return { client, baseURL, key }
-}
-
-// promptsOf is sign-in's single question: everything one line, so the one
-// dialog the host shows for it is all there is to fill. The models aren't
-// asked: they are read from the relay (discoverModels).
+// promptsOf is sign-in's questions: which client to impersonate (the
+// select, first), then where the relay is. The models aren't asked: they
+// are read from the relay (discoverModels).
 const promptsOf = () => [
 	{
+		type: "select",
+		key: "client",
+		message: "使用哪种方式模拟",
+		options: [
+			{ label: "Codex", value: "codex" },
+			{ label: "Claude Code", value: "claude-code" },
+		],
+	},
+	{
 		type: "text",
-		key: "line",
-		message: "使用哪种方式模拟 + 中转地址 + API key（空格分隔，如 codex https://relay.example.com sk-…）",
-		placeholder: "codex https://relay.example.com sk-…",
-		validate: (v) => (parseLine(v).error ?? null),
+		key: "baseURL",
+		message: "Relay base URL, no path",
+		placeholder: "https://relay.example.com",
+		validate: (v) => {
+			try {
+				baseOf(v)
+				return null
+			} catch {
+				return "an address like https://relay.example.com"
+			}
+		},
 	},
 ]
 
-// the way to sign in is one: one line in, one dialog. With an authorize
-// on an api method the host asks no key field of its own — the key comes
-// from here — so the line above is the whole sign-in.
+// the way to sign in is one: the prompts above ask which client to
+// impersonate and the relay's address, and the host's key field follows.
+// The host renders each prompt its own screen — that is its sign-in UI,
+// not something the plugin can restructure.
 const methodsOf = () => [
 	{
 		type: "api",
 		label: "Client Sim",
-		placeholder: "codex https://relay.example.com sk-…",
+		placeholder: "sk-…",
 		prompts: promptsOf(),
 		authorize: async (inputs) => {
-			const parsed = parseLine(inputs?.line)
-			if (parsed.error) return { type: "failed", error: parsed.error }
-			return { type: "success", key: parsed.key, metadata: { client: parsed.client, baseURL: parsed.baseURL } }
+			const client = String(inputs?.client ?? "")
+			if (!SIMS[client]) return { type: "failed", error: "pick which client to impersonate: Codex or Claude Code" }
+			return { type: "success", metadata: { client } }
 		},
 	},
 ]
@@ -436,6 +422,6 @@ export const ClientSimPlugin = makePlugin
 
 // for tests
 export const _internal = {
-	SIMS, baseOf, stableUUID, codexUserAgent, ccUserAgent, simulated, modelList, promptsOf, parseLine, configModel, runtimeModel, simOf,
+	SIMS, baseOf, stableUUID, codexUserAgent, ccUserAgent, simulated, modelList, promptsOf, configModel, runtimeModel, simOf,
 	constants: { CODEX_INSTRUCTIONS, CC_SYSTEM },
 }
